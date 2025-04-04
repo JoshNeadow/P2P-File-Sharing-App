@@ -1,0 +1,21 @@
+<div id="receive-requests-list" th:fragment="receive-requests-list">
+    <div id="receive-requests-container">
+      <div th:if="${#lists.isEmpty(requests)}" class="searching-container">
+        <p>No pending receive requests.</p>
+      </div>
+  
+      <div th:each="request : ${requests}" class="service-card">
+        <h3 th:text="${request.peer}">Sender Name</h3>
+        <p th:text="${request.fileName}"></p>
+        <button
+            class="action-button"
+            th:hx-post="'/api/transfers/approve?type=receive&peerName=' + ${request.peer} + '&fileName=' + ${request.fileName}"
+            hx-target="#toast-container"
+            hx-swap="beforeend"
+        >
+            Accept File
+        </button>
+      </div>
+    </div>
+  </div>
+  

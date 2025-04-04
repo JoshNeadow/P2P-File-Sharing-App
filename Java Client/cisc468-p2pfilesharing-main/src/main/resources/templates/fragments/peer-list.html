@@ -1,0 +1,100 @@
+<div id="peer-list" th:fragment="peer-list">
+  <div th:each="peer : ${peers}" class="peer-container">
+    <div class="service-card">
+      <h3 th:text="${peer.name}"></h3>
+
+      <div class="info-row">
+        <span class="info-label">Host:</span>
+        <span th:text="${peer.host}"></span>
+      </div>
+
+      <div class="info-row">
+        <span class="info-label">Port:</span>
+        <span th:text="${peer.port}"></span>
+      </div>
+
+      <div>
+        <span class="info-label">Files:</span>
+        <div
+          class="files-container"
+          th:if="${peer.files != null && !peer.files.isEmpty()}"
+        >
+          <table class="files-table">
+            <thead>
+              <tr>
+                <th>Filename</th>
+                <th>Hash</th>
+                <th>Request Files</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr th:each="file : ${peer.files}">
+                <td th:text="${file.name}"></td>
+                <td class="hash-cell">
+                  <span class="hash-value" th:text="${file.hash}"></span>
+                </td>
+                <td>
+                  <button
+                    class="action-button"
+                    th:hx-get="'http://' + ${peer.host} + ':' + ${peer.port} + '/api/transfers/request?type=receive&peerName=' + ${ownServiceId} + '&fileName=' + ${file.name}"
+                    hx-swap="none"
+                  >
+                    Request File
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          class="files-container"
+          th:if="${peer.files == null || peer.files.isEmpty()}"
+        >
+          <p>No files available</p>
+        </div>
+      </div>
+
+      <div class="info-row">
+        <span class="info-label">Status:</span>
+        <span th:if="${peer.isOnline}" class="status-badge status-online"
+          >Online</span
+        >
+        <span th:unless="${peer.isOnline}" class="status-badge status-offline"
+          >Offline</span
+        >
+      </div>
+
+      <div>
+        <span class="info-label">Send File to This Peer:</span>
+        <div class="files-container" th:if="${myFiles != null && !myFiles.isEmpty()}">
+          <table class="files-table">
+            <thead>
+              <tr>
+                <th>Filename</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr th:each="file : ${myFiles}">
+                <td th:text="${file.name}"></td>
+                <td>
+                  <button
+                    class="action-button"
+                    th:hx-post="'/api/transfers/approve?type=send&peerName=' + ${peer.name} + '&fileName=' + ${file.name}"
+                    hx-target="#toast-container"
+                    hx-swap="beforeend"
+                  >
+                    Send File
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="files-container" th:if="${myFiles == null || myFiles.isEmpty()}">
+          <p>No local files available</p>
+        </div>
+      </div>      
+    </div>
+  </div>
+</div>
