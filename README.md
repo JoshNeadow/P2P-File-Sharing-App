@@ -46,5 +46,8 @@ Visit http://localhost:8000 in your browser.
 ```
 
 ### ▶️ Run the Java Client
+
+```bash
 cd java-client/cisc468-p2pfilesharing-main
 sudo mvn spring-boot:run -D spring-boot.run.profiles=primary
+```
