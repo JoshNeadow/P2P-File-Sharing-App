@@ -21,6 +21,7 @@ SOCKET_PORT = 9000
 AVAILABLE_FILES_DIR = "available_files"
 KEY_FILE = "peer_key.pem"
 AES_KEY_FILE = "aes_key.bin"
+TRUSTED_PEERS_FILE = ""
 
 app = Flask(__name__)
 os.makedirs(AVAILABLE_FILES_DIR, exist_ok=True)

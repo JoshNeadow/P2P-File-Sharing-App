@@ -8,6 +8,7 @@ This repository contains two peer-to-peer (P2P) file sharing clients:
 These clients can discover each other over a local network, request file transfers, and securely exchange files using public key cryptography and encrypted local storage.
 
 ---
+
 ## 📦 Features
 
 - 🌐 Peer discovery on a local network (mDNS)
@@ -22,15 +23,18 @@ These clients can discover each other over a local network, request file transfe
 - ⚠️ Error and security warning messages with test coverage
 
 ---
+
 ## 🚀 Getting Started
 
 ### 🔧 Requirements
 
 **Python Client:**
+
 - Python 3.8+
 - `pip install -r requirements.txt`
 
 **Java Client:**
+
 - Java 17+
 - Maven
 - Spring Boot
@@ -40,10 +44,11 @@ These clients can discover each other over a local network, request file transfe
 ```bash
 cd python-client/P2P-SECURE-FILE-SHARING
 pip install -r requirements.txt
-python main.py
+sudo python main.py
+
+```
 
 Visit http://localhost:8000 in your browser.
-```
 
 ### ▶️ Run the Java Client
 
@@ -51,3 +56,7 @@ Visit http://localhost:8000 in your browser.
 cd java-client/cisc468-p2pfilesharing-main
 sudo mvn spring-boot:run -D spring-boot.run.profiles=primary
 ```
+
+Visit http://localhost:8080 in your browser.
+
+Can run two Java clients simultaneously by instead using `spring-boot.run.profiles=secondary`.
