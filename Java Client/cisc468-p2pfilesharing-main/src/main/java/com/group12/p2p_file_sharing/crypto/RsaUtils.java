@@ -27,8 +27,7 @@ public class RsaUtils {
     }
 
     // encrypt with public key
-    public static byte[] encryptFile(File file, PublicKey publicKey) throws Exception {
-        byte[] data = Files.readAllBytes(file.toPath());
+    public static byte[] encryptFile(byte[] data, PublicKey publicKey) throws Exception {
         Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.ENCRYPT_MODE, publicKey);
         return cipher.doFinal(data);
@@ -40,18 +39,4 @@ public class RsaUtils {
         cipher.init(Cipher.DECRYPT_MODE, privateKey);
         return cipher.doFinal(encryptedData);
     }
-
-    // Deserialize strings to keys
-    // public static PublicKey publicKeyFromString(String keyStr) throws Exception {
-    // byte[] keyBytes = Base64.getDecoder().decode(keyStr);
-    // X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
-    // return KeyFactory.getInstance(ALGORITHM).generatePublic(spec);
-    // }
-
-    // public static PrivateKey privateKeyFromString(String keyStr) throws Exception
-    // {
-    // byte[] keyBytes = Base64.getDecoder().decode(keyStr);
-    // PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
-    // return KeyFactory.getInstance(ALGORITHM).generatePrivate(spec);
-    // }
 }

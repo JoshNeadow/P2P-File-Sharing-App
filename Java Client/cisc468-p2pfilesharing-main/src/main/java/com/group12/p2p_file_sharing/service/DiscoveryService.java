@@ -5,15 +5,12 @@ import javax.jmdns.ServiceInfo;
 import javax.jmdns.ServiceListener;
 import javax.jmdns.ServiceEvent;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.Map;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -39,6 +36,8 @@ public class DiscoveryService implements DisposableBean {
 
     @Value("${server.port:8080}") // default to 8080 if not found
     private int servicePort;
+    @Value("${peer.name}")
+    String thisPeerName;
     private final JmDNS jmdns;
 
     public DiscoveryService(PeerRepository peerStore)
@@ -115,7 +114,7 @@ public class DiscoveryService implements DisposableBean {
                     return;
                 }
 
-                if (info.getName().equals("java-p2pfileshare")) {
+                if (info.getName().equals(thisPeerName)) {
                     return;
                 }
 
@@ -132,6 +131,8 @@ public class DiscoveryService implements DisposableBean {
                     List<FileDesc> files = getPeerFiles(info.getName(), peerAddress);
 
                     peerStore.addPeer(new Peer(info, pubKey, files));
+                } else {
+                    peerStore.getPeerByName(info.getName()).setOnline(true);
                 }
             }
         });

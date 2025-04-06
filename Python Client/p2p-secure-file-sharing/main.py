@@ -4,7 +4,9 @@ from flask import Flask, render_template_string, jsonify, request
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
 import secrets, hashlib, socket, threading, time, os, json, requests
 import base64
@@ -12,7 +14,7 @@ from flask import send_file
 from io import BytesIO
 import traceback
 from flask import make_response
-from aes_utils import aes_encrypt
+# from aes_utils import aes_encrypt
 
 
 SERVICE_TYPE = "_p2p._tcp.local."
@@ -20,8 +22,9 @@ HTTP_PORT = 8000
 SOCKET_PORT = 9000
 AVAILABLE_FILES_DIR = "available_files"
 KEY_FILE = "peer_key.pem"
-AES_KEY_FILE = "aes_key.bin"
 TRUSTED_PEERS_FILE = ""
+
+user_password = ""
 
 app = Flask(__name__)
 os.makedirs(AVAILABLE_FILES_DIR, exist_ok=True)
@@ -66,17 +69,6 @@ def load_or_create_keys():
     return private_key, private_key.public_key()
 
 private_key, public_key = load_or_create_keys()
-
-def load_or_generate_aes_key():
-    if os.path.exists(AES_KEY_FILE):
-        with open(AES_KEY_FILE, "rb") as f:
-            return f.read()
-    key = secrets.token_bytes(32)  # AES-256
-    with open(AES_KEY_FILE, "wb") as f:
-        f.write(key)
-    return key
-
-AES_KEY = load_or_generate_aes_key()
 
 def get_fingerprint(pub_key):
     pub_bytes = pub_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -293,6 +285,20 @@ def index():
         </script>
     </head>
     <body>
+        <dialog id="startupPasswordDialog" open>
+            <form
+                id="startupPasswordForm"
+            >
+                <label for="startupPassword">Enter encryption password:</label><br />
+                <input
+                type="password"
+                name="password"
+                id="startupPassword"
+                required
+                /><br /><br />
+                <button type="submit">Submit</button>
+            </form>
+        </dialog>
         <div class="service-card">
             <h2 style="color: var(--primary-color);">Available Peers</h2>
             <select id="peers"></select>
@@ -320,6 +326,26 @@ def index():
             <button onclick="changeKey()" class="action-button">Change Key</button>
         </div>
     </body>
+    <script>
+                                  document.getElementById("startupPasswordForm").addEventListener("submit", async (e) => {
+                e.preventDefault();
+
+                const password = document.getElementById("startupPassword").value;
+
+                const response = await fetch("/api/transfers/set-password", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ password }),
+                });
+
+                if (response.ok) {
+                    document.getElementById("startupPasswordDialog").close();
+                    alert("Password successfully set");
+                } else {
+                    alert("Password rejected.");
+                }
+            });
+    </script>
     </html>
     ''')
 
@@ -379,7 +405,7 @@ def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("10.255.255.255", 1))
-        return s.getsockname()[0]
+        return s.getsockname()[0] 
     except:
         return "127.0.0.1"
     finally:
@@ -445,19 +471,56 @@ def handle_transfer_request():
 # Java sends encrypted file here when peer approves the transfer request
 @app.route('/api/transfers/receive', methods=['POST'])
 def receive_file():
-    file_name = request.args.get('fileName')
+    file_name = request.args.get('fileName')[:-4]   # remove .bin
     encrypted_file_data = request.data
     try:
         decrypted_data = rsa_decrypt(encrypted_file_data)
-        disk_data = aes_encrypt(decrypted_data)
 
-        with open(os.path.join(AVAILABLE_FILES_DIR, file_name), "wb") as f:
-            f.write(disk_data)
+        # === PARAMETERS ===
+        salt_length = 16
+        iv_length = 12
+        key_length = 32  # 256 bits = 32 bytes
+        iterations = 20000
+
+        # === RANDOM SALT & IV ===
+        salt = os.urandom(salt_length)
+        iv = os.urandom(iv_length)
+
+        # === USER PASSWORD ===
+        global user_password
+        user_password_bytes = user_password.encode('utf-8')
+
+        # === PBKDF2 KEY DERIVATION ===
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=key_length,
+            salt=salt,
+            iterations=iterations,
+        )
+        key = kdf.derive(user_password_bytes)
+
+        # === ENCRYPTION ===
+        aesgcm = AESGCM(key)
+        ciphertext = aesgcm.encrypt(iv, decrypted_data, None)  # optional AAD is None
+
+        # === WRITE TO FILE ===
+        with open(os.path.join(AVAILABLE_FILES_DIR, file_name + ".bin"), "wb") as f:
+            f.write(salt)       # 16 bytes
+            f.write(iv)         # 12 bytes
+            f.write(ciphertext) # ciphertext + 16-byte GCM tag included
 
         return "<div class='toast success'>File successfully transferred</div>", 200
     except Exception as e:
         traceback.print_exc()
         return "<div class='toast error'>Error occurred</div>", 500
+    
+@app.route('/api/transfers/set-password', methods=['POST'])
+def setUserPassword():
+    global user_password
+    # user_password = request.args.get('password')
+    user_password = request.json['password']
+
+    return "<div class='toast success'>Password successfully set</div>"
     
     
 @app.route('/inbox')
@@ -526,20 +589,11 @@ def approve(index):
             print("File not found:", file_path)
             return jsonify({"error": "File not found"}), 404
 
-        try:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
+        global user_password
+        plaintext = decrypt_file(file_path, user_password)
 
-            if file_data.startswith(b"AES1"):
-                from aes_utils import aes_decrypt
-                try:
-                    file_data = aes_decrypt(file_data)
-                    print(file_data)
-                except Exception as e:
-                    print(f"[ERROR] AES decryption failed for {file_name}: {e}")
-                    return jsonify({"error": "Could not decrypt file"}), 500
-                
-            encrypted = rsa_encrypt_for_java(file_data, peer_info["fingerprint"])  # Using base64 DER key
+        try:    
+            encrypted = rsa_encrypt_for_java(plaintext, peer_info["fingerprint"])  # Using base64 DER key
 
             # Send directly to Java client at /api/transfers/receive
             receive_url = f"http://{peer_info['ip']}:{peer_info['port']}/api/transfers/receive"
@@ -570,10 +624,10 @@ def approve(index):
 
         if not peer_info:
             return jsonify({"error": "Peer not found"}), 404
-
+        
         try:
-            send_url = f"http://{peer_info['ip']}:{peer_info['port']}/api/transfers/send"
-            res = requests.post(send_url, params={"peerName": socket.gethostname(), "fileName": file_name})
+            send_url = f"http://{peer_info['ip']}:{peer_info['port']}/api/transfers/approve"
+            res = requests.post(send_url, params={"type": "send", "peerName": socket.gethostname(), "fileName": file_name})
 
             if res.status_code == 200:
                 return jsonify({"message": "File request accepted and Java is sending."}), 200
@@ -584,6 +638,33 @@ def approve(index):
             print("[ERROR] While triggering Java to send the file:", e)
             return jsonify({"error": str(e)}), 500
 
+def decrypt_file(file_path: str, password: str) -> bytes:
+    salt_length = 16
+    iv_length = 12
+    iterations = 20000
+    key_length = 32  # 256 bits
+
+    with open(file_path, 'rb') as f:
+        data = f.read()
+
+    salt = data[:salt_length]
+    iv = data[salt_length:salt_length + iv_length]
+    ciphertext = data[salt_length + iv_length:]  # includes GCM tag at the end
+
+    # Derive key with PBKDF2
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=key_length,
+        salt=salt,
+        iterations=iterations,
+        backend=default_backend()
+    )
+    key = kdf.derive(password.encode())
+
+    # Decrypt using AES-GCM
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(iv, ciphertext, None)
+    return plaintext
 
 
 @app.route('/request_send_file', methods=['POST'])
@@ -714,27 +795,27 @@ def change_key():
 
     return jsonify({"message": "Key changed and peers notified"})
 
-def encrypt_new_plaintext_files():
-    while True:
-        for f in os.listdir(AVAILABLE_FILES_DIR):
-            path = os.path.join(AVAILABLE_FILES_DIR, f)
-            try:
-                with open(path, "rb") as file:
-                    content = file.read()
+# def encrypt_new_plaintext_files():
+#     while True:
+#         for f in os.listdir(AVAILABLE_FILES_DIR):
+#             path = os.path.join(AVAILABLE_FILES_DIR, f)
+#             try:
+#                 with open(path, "rb") as file:
+#                     content = file.read()
 
-                if content.startswith(b"AES1"):
-                    continue  # already encrypted
+#                 if content.startswith(b"AES1"):
+#                     continue  # already encrypted
 
-                encrypted = aes_encrypt(content)
-                with open(path, "wb") as out:
-                    out.write(encrypted)
-                print(f"[SECURE STORAGE] Encrypted manually added file: {f}")
-            except Exception as e:
-                print(f"[SECURE STORAGE ERROR] Skipping file {f}: {e}")
-        time.sleep(5)
+#                 encrypted = aes_encrypt(content)
+#                 with open(path, "wb") as out:
+#                     out.write(encrypted)
+#                 print(f"[SECURE STORAGE] Encrypted manually added file: {f}")
+#             except Exception as e:
+#                 print(f"[SECURE STORAGE ERROR] Skipping file {f}: {e}")
+#         time.sleep(5)
 
 
-threading.Thread(target=encrypt_new_plaintext_files, daemon=True).start()
+# threading.Thread(target=encrypt_new_plaintext_files, daemon=True).start()
 
 if __name__ == "__main__":
     start_message_listener()

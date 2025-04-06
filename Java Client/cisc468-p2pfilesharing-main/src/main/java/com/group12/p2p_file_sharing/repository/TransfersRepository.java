@@ -28,12 +28,12 @@ public class TransfersRepository {
         pendingReceives.add(request);
     }
 
-    public void removeSendRequest(TransferRequest request) {
-        pendingSends.remove(request);
+    public void removeSendRequest(String fileName) {
+        pendingSends.removeIf(request -> request.getFileName().equals(fileName));
     }
 
-    public void removeReceiveRequest(TransferRequest request) {
-        pendingReceives.remove(request);
+    public void removeReceiveRequest(String fileName) {
+        pendingReceives.removeIf(request -> request.getFileName().equals(fileName));
     }
 
 }

@@ -203,9 +203,76 @@
       .error {
         background-color: #f44336;
       }
+
+      dialog {
+        position: fixed;
+        z-index: 2000;
+        border: none;
+        border-radius: var(--border-radius);
+        background-color: var(--card-bg);
+        padding: 2rem;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        max-width: 400px;
+        width: 90%;
+        margin: 100px auto;
+        text-align: center;
+      }
+
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.4);
+      }
+
+      #startupPasswordForm label {
+        display: block;
+        font-weight: bold;
+        margin-bottom: 8px;
+        color: var(--secondary-color);
+      }
+
+      #startupPasswordForm input[type="password"] {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: var(--border-radius);
+        margin-bottom: 16px;
+        font-size: 1rem;
+      }
+
+      #startupPasswordForm button {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: var(--border-radius);
+        font-size: 1rem;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+      }
+
+      #startupPasswordForm button:hover {
+        background-color: #2980b9;
+      }
     </style>
   </head>
   <body>
+    <dialog id="startupPasswordDialog" open>
+      <form
+        id="startupPasswordForm"
+        hx-post="/api/transfers/set-password"
+        hx-trigger="submit"
+        hx-target="#toast-container"
+        hx-swap="beforeend"
+      >
+        <label for="startupPassword">Enter encryption password:</label><br />
+        <input
+          type="password"
+          name="password"
+          id="startupPassword"
+          required
+        /><br /><br />
+        <button type="submit">Submit</button>
+      </form>
+    </dialog>
     <div id="toast-container"></div>
     <section>
       <h1>Pending Receive Requests</h1>
@@ -253,7 +320,7 @@
         </button>
       </div>
     </section>
-    
+
     <script>
       document.body.addEventListener("htmx:afterSwap", function (event) {
         if (event.detail.target.id === "toast-container") {
@@ -268,6 +335,12 @@
           }
         }
       });
+
+      document
+        .getElementById("startupPasswordForm")
+        .addEventListener("htmx:afterRequest", () => {
+          document.getElementById("startupPasswordDialog").close();
+        });
     </script>
   </body>
 </html>

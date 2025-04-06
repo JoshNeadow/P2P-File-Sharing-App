@@ -2,20 +2,20 @@ package com.group12.p2p_file_sharing.controller;
 
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.spec.KeySpec;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Base64;
 
-import java.security.KeyPair;
-import org.springframework.http.HttpStatus;
-
+import javax.crypto.Cipher;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -28,10 +28,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.http.ResponseEntity;
-
 import com.group12.p2p_file_sharing.crypto.RsaUtils;
 import com.group12.p2p_file_sharing.model.FileDesc;
 import com.group12.p2p_file_sharing.model.Peer;
@@ -42,9 +39,6 @@ import com.group12.p2p_file_sharing.service.KeyManager;
 
 import org.springframework.ui.Model;
 
-
-
-
 @Controller
 @RequestMapping("/api/transfers")
 public class TransfersController {
@@ -52,23 +46,21 @@ public class TransfersController {
     TransfersRepository transfersRepository;
     KeyManager keyManager;
     private final RestTemplate restTemplate = new RestTemplate();
-    private final String thisPeerName;
+
+    private String userPassword;
 
     @Value("${file_directory:available-files}")
     private String FILE_DIR;
 
     public TransfersController(
-        TransfersRepository transfersRepository,
-        PeerRepository peerRepository,
-        KeyManager keyManager,
-        @Value("${peer.name}") String thisPeerName
-    ) {
+            TransfersRepository transfersRepository,
+            PeerRepository peerRepository,
+            KeyManager keyManager) {
         this.transfersRepository = transfersRepository;
         this.peerRepository = peerRepository;
         this.keyManager = keyManager;
-        this.thisPeerName = thisPeerName;
+        this.userPassword = "";
     }
-
 
     // called by other peers
     @ResponseBody // doesn't return a view
@@ -107,36 +99,64 @@ public class TransfersController {
             @RequestParam String fileName) {
         Peer peer = peerRepository.getPeerByName(peerName);
         if (type.equals("send")) {
-            try {
-                // Step 1: Notify peer you want to send a file
-                String notifyUrl = "http://" + peer.getHost() + ":" + peer.getPort()
-                        + "/api/transfers/request?type=send&peerName=" + peerRepository.getOwnServiceId()
-                        + "&fileName=" + fileName;
+            File uploadDir = new File(FILE_DIR);
+            File matchingFile = null;
 
-                restTemplate.getForObject(notifyUrl, String.class);
-
-                // Step 2: Save the request locally so the user can click “Send” later from UI
-                transfersRepository.addSendRequest(new TransferRequest(type, peerName, fileName));
-
-                return "<div class='toast success'>Send request sent. Waiting for peer approval.</div>";
-
-            } catch (Exception e) {
-                e.printStackTrace();
-                return "<div class='toast error'>Failed to send file request</div>";
+            if (uploadDir.exists() && uploadDir.isDirectory()) {
+                matchingFile = Arrays.stream(uploadDir.listFiles())
+                        .filter(file -> file.getName().equals(fileName))
+                        .findFirst()
+                        .orElse(null);
             }
+
+            // matched file
+            if (matchingFile != null) {
+                try {
+                    // convert stored Base64 key to PublicKey
+                    PublicKey publicKey = RsaUtils.getPublicKeyFromBase64(peer.getPublicKey());
+
+                    // decrypt AES-GCM local file
+                    byte[] decryptedFile = decryptFile(matchingFile);
+
+                    // String s = new String(decryptedFile, StandardCharsets.UTF_8);
+                    // System.out.println(s);
+
+                    // encrypt file with receiver's public RSA key
+                    byte[] encryptedFile = RsaUtils.encryptFile(decryptedFile, publicKey);
+
+                    String peerAddress = "http://" + peer.getHost() + ":" + peer.getPort()
+                            + "/api/transfers/receive?fileName=" + fileName;
+
+                    HttpEntity<byte[]> requestEntity = new HttpEntity<>(encryptedFile);
+                    String res = restTemplate.exchange(
+                            peerAddress,
+                            HttpMethod.POST,
+                            requestEntity,
+                            String.class).getBody();
+
+                    transfersRepository.removeSendRequest(fileName);
+                    updatePeerFiles(peerName);
+
+                    return res;
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            return "some error";
         }
 
         try {
             String peerAddress = "http://" + peer.getHost() + ":" + peer.getPort()
-            + "/approve/" + peerRepository.getOwnServiceId();
+                    + "/approve/" + peerRepository.getOwnServiceId();
 
             String res = restTemplate.postForObject(
                     peerAddress + "?type=send&peerName=" + peerRepository.getOwnServiceId() + "&fileName=" + fileName,
                     null,
-                    String.class
-            );
+                    String.class);
 
-            transfersRepository.removeReceiveRequest(new TransferRequest(type, peerName, fileName));
+            transfersRepository.removeReceiveRequest(fileName);
 
             return res;
         } catch (Exception e) {
@@ -163,9 +183,41 @@ public class TransfersController {
 
         try {
             byte[] decryptedFile = RsaUtils.decryptFile(encryptedFile, keyManager.getPrivateKey());
-            File outputFile = new File(FILE_DIR, "/" + fileName);
-            try (FileOutputStream fos = new FileOutputStream(outputFile)) {
-                fos.write(decryptedFile);
+            String trimmed = fileName.substring(0, fileName.length() - 4); // remove .bin
+
+            File outputFile = new File(FILE_DIR, "/" + trimmed + ".bin");
+
+            // === PARAMETERS ===
+            int saltLength = 16;
+            int ivLength = 12;
+            int keyLength = 256;
+            int iterations = 20_000;
+            int tagLength = 128; // in bits, GCM standard tag size
+
+            // === RANDOM SALT & IV ===
+            SecureRandom random = new SecureRandom();
+            byte[] salt = new byte[saltLength];
+            byte[] iv = new byte[ivLength];
+            random.nextBytes(salt);
+            random.nextBytes(iv);
+
+            // === PBKDF2 KEY DERIVATION ===
+            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+            KeySpec spec = new PBEKeySpec(userPassword.toCharArray(), salt, iterations, keyLength);
+            byte[] keyBytes = factory.generateSecret(spec).getEncoded();
+            SecretKeySpec key = new SecretKeySpec(keyBytes, "AES");
+
+            // === ENCRYPTION ===
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            GCMParameterSpec gcmSpec = new GCMParameterSpec(tagLength, iv);
+            cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec);
+            byte[] ciphertext = cipher.doFinal(decryptedFile); // includes the tag at the end
+
+            // === WRITE TO FILE ===
+            try (FileOutputStream out = new FileOutputStream(outputFile)) {
+                out.write(salt); // 16 bytes
+                out.write(iv); // 12 bytes
+                out.write(ciphertext); // ciphertext + GCM tag
             }
 
             return "<div class='toast success'>File successfully transferred</div>";
@@ -175,49 +227,38 @@ public class TransfersController {
         }
     }
 
-    @PostMapping("/send")
     @ResponseBody
-    public String sendApprovedFile(@RequestParam String peerName, @RequestParam String fileName) {
-        Peer peer = peerRepository.getPeerByName(peerName);
+    @PostMapping("/set-password")
+    public String setUserPassword(@RequestParam String password) {
+        this.userPassword = password;
 
-        File uploadDir = new File(FILE_DIR);
-        File matchingFile = null;
-
-        if (uploadDir.exists() && uploadDir.isDirectory()) {
-            matchingFile = Arrays.stream(uploadDir.listFiles())
-                    .filter(file -> file.getName().equals(fileName))
-                    .findFirst()
-                    .orElse(null);
-        }
-
-        if (matchingFile == null) {
-            return "<div class='toast error'>File not found</div>";
-        }
-
-        try {
-            PublicKey publicKey = RsaUtils.getPublicKeyFromBase64(peer.getPublicKey());
-            byte[] encryptedFile = RsaUtils.encryptFile(matchingFile, publicKey);
-
-            String peerAddress = "http://" + peer.getHost() + ":" + peer.getPort()
-                    + "/api/transfers/receive?fileName=" + fileName;
-
-            HttpEntity<byte[]> requestEntity = new HttpEntity<>(encryptedFile);
-            String res = restTemplate.exchange(
-                    peerAddress,
-                    HttpMethod.POST,
-                    requestEntity,
-                    String.class).getBody();
-
-            transfersRepository.removeSendRequest(new TransferRequest("send", peerName, fileName));
-
-            return res;
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            return "<div class='toast error'>Failed to send file</div>";
-        }
+        return "<div class='toast success'>Password successfully set</div>";
     }
 
+    private byte[] decryptFile(File encryptedFile) throws Exception {
+        int saltLength = 16; // bytes
+        int ivLength = 12; // bytes
+        int keyLength = 256; // bits
+        int iterations = 20000;
+        int tagLength = 128; // bits
+
+        byte[] fileBytes = Files.readAllBytes(encryptedFile.toPath());
+
+        // === Extract parts ===
+        byte[] salt = Arrays.copyOfRange(fileBytes, 0, saltLength);
+        byte[] iv = Arrays.copyOfRange(fileBytes, saltLength, saltLength + ivLength);
+        byte[] ciphertext = Arrays.copyOfRange(fileBytes, saltLength + ivLength, fileBytes.length);
+
+        // === Derive key with PBKDF2 ===
+        SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+        KeySpec spec = new PBEKeySpec(userPassword.toCharArray(), salt, iterations, keyLength);
+        byte[] keyBytes = factory.generateSecret(spec).getEncoded();
+        SecretKeySpec key = new SecretKeySpec(keyBytes, "AES");
+
+        // === Decrypt with AES-GCM ===
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(tagLength, iv);
+        cipher.init(Cipher.DECRYPT_MODE, key, gcmSpec);
+        return cipher.doFinal(ciphertext); // returns decrypted bytes
+    }
 }
-
-

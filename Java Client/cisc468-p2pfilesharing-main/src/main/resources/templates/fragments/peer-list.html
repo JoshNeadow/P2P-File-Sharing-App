@@ -66,7 +66,10 @@
 
       <div>
         <span class="info-label">Send File to This Peer:</span>
-        <div class="files-container" th:if="${myFiles != null && !myFiles.isEmpty()}">
+        <div
+          class="files-container"
+          th:if="${myFiles != null && !myFiles.isEmpty()}"
+        >
           <table class="files-table">
             <thead>
               <tr>
@@ -80,7 +83,7 @@
                 <td>
                   <button
                     class="action-button"
-                    th:hx-post="'/api/transfers/approve?type=send&peerName=' + ${peer.name} + '&fileName=' + ${file.name}"
+                    th:hx-post="'http://' + ${peer.host} + ':' + ${peer.port} + '/api/transfers/request?type=send&peerName=' + ${ownServiceId} + '&fileName=' + ${file.name}"
                     hx-target="#toast-container"
                     hx-swap="beforeend"
                   >
@@ -91,10 +94,13 @@
             </tbody>
           </table>
         </div>
-        <div class="files-container" th:if="${myFiles == null || myFiles.isEmpty()}">
+        <div
+          class="files-container"
+          th:if="${myFiles == null || myFiles.isEmpty()}"
+        >
           <p>No local files available</p>
         </div>
-      </div>      
+      </div>
     </div>
   </div>
 </div>
